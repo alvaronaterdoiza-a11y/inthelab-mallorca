@@ -97,9 +97,9 @@ const T = {
     typeIndividual: "Individual",
     typeAmbos: "Ambdós (grupal i individual)",
     group: "Grup",
-    group1: "Grup 1",
-    group2: "Grup 2",
-    group3: "Grup 3",
+    group1: "",
+    group2: "",
+    group3: "",
     // ---- Preinscripción grupal (alumno) ----
     mySignups: "Les meves properes sessions",
     chooseSignupType: "Quin tipus de sessió vols reservar?",
@@ -213,9 +213,9 @@ const T = {
     typeIndividual: "Individual",
     typeAmbos: "Ambos (grupal e individual)",
     group: "Grupo",
-    group1: "Grupo 1",
-    group2: "Grupo 2",
-    group3: "Grupo 3",
+    group1: "",
+    group2: "",
+    group3: "",
     // ---- Preinscripción grupal (alumno) ----
     mySignups: "Mis próximas sesiones",
     chooseSignupType: "¿Qué tipo de sesión quieres reservar?",
@@ -1138,8 +1138,8 @@ function StudentsTab({ t, students, addStudent, removeStudent, updateStudent, co
 
   function studentTypeLabel(s) {
     if (s.studentType === "individual") return t.typeIndividual;
-    if (s.studentType === "ambos") return `${t.typeAmbos}${s.groupNumber ? ` · ${t.group} ${s.groupNumber}` : ""}`;
-    return `${t.typeGrupal}${s.groupNumber ? ` · ${t.group} ${s.groupNumber}` : ""}`;
+    if (s.studentType === "ambos") return t.typeAmbos;
+    return t.typeGrupal;
   }
 
   return (
@@ -1241,14 +1241,7 @@ function StudentEditPanel({ t, student, updateStudent }) {
   }
 
   function handleStudentTypeChange(newType) {
-    updateStudent(student.id, {
-      studentType: newType,
-      groupNumber: newType === "individual" ? null : student.groupNumber || 1,
-    });
-  }
-
-  function handleGroupChange(newGroup) {
-    updateStudent(student.id, { groupNumber: Number(newGroup) });
+    updateStudent(student.id, { studentType: newType, groupNumber: null });
   }
 
   const purchases = allPurchases(student);
@@ -1279,24 +1272,6 @@ function StudentEditPanel({ t, student, updateStudent }) {
           {t.typeAmbos}
         </button>
       </div>
-
-      {student.studentType !== "individual" && (
-        <>
-          <h4 style={styles.subheadingSmall}>{t.group}</h4>
-          <div style={styles.toggleRow}>
-            {[1, 2, 3].map((g) => (
-              <button
-                key={g}
-                type="button"
-                style={{ ...styles.toggleBtnTiny, ...(student.groupNumber === g ? styles.toggleBtnActive : {}) }}
-                onClick={() => handleGroupChange(g)}
-              >
-                {g}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
 
       <h4 style={styles.subheadingSmall}>{t.purchaseHistory}</h4>
       <div style={styles.dateList}>
@@ -1358,7 +1333,6 @@ function AddStudentForm({ t, onCancel, onSave }) {
   const [local, setLocal] = useState(true);
   const [sueltasBought, setSueltasBought] = useState(1);
   const [studentType, setStudentType] = useState("grupal");
-  const [groupNumber, setGroupNumber] = useState(1);
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -1374,7 +1348,7 @@ function AddStudentForm({ t, onCancel, onSave }) {
       attendance: [],
       purchases: [],
       studentType,
-      groupNumber: studentType === "individual" ? null : Number(groupNumber),
+      groupNumber: null,
     });
   }
 
@@ -1392,17 +1366,6 @@ function AddStudentForm({ t, onCancel, onSave }) {
           <option value="ambos">{t.typeAmbos}</option>
         </select>
       </label>
-
-      {studentType !== "individual" && (
-        <label style={styles.fieldLabel}>
-          {t.group}
-          <select style={styles.input} value={groupNumber} onChange={(e) => setGroupNumber(e.target.value)}>
-            <option value={1}>{t.group1}</option>
-            <option value={2}>{t.group2}</option>
-            <option value={3}>{t.group3}</option>
-          </select>
-        </label>
-      )}
 
       <label style={styles.fieldLabel}>
         {t.bonoType}
@@ -1451,8 +1414,12 @@ function AddStudentForm({ t, onCancel, onSave }) {
 }
 
 function PlanningTab({ t, lang, students, openDates, groupSignups, individualAvailability, individualBookings, reload }) {
-  const [selectedDate, setSelectedDate] = useState(SESSIONS[0]);
+  const [selected, setSelected] = useState(new Set()); // fechas seleccionadas con checkbox
+  const [bulkStartHour, setBulkStartHour] = useState(9);
+  const [bulkEndHour, setBulkEndHour] = useState(13);
   const [busy, setBusy] = useState(false);
+  const [expandedDate, setExpandedDate] = useState(null);
+  const [addStudentId, setAddStudentId] = useState("");
 
   const studentById = useMemo(() => {
     const map = {};
@@ -1460,251 +1427,304 @@ function PlanningTab({ t, lang, students, openDates, groupSignups, individualAva
     return map;
   }, [students]);
 
-  const isOpen = !!openDates[selectedDate];
-
-  async function toggleOpen() {
-    setBusy(true);
-    try {
-      await upsertOpenDate(selectedDate, !isOpen);
-    } catch (e) {
-      console.error(e);
-    }
-    await reload();
-    setBusy(false);
-  }
-
-  const signupsForDate = groupSignups.filter((g) => g.date === selectedDate);
-
-  async function teacherRemoveSignup(signupId) {
-    setBusy(true);
-    try {
-      await deleteGroupSignup(signupId);
-    } catch (e) {
-      console.error(e);
-    }
-    await reload();
-    setBusy(false);
-  }
-
-  const [addStudentId, setAddStudentId] = useState("");
   const grupalStudents = students.filter((s) => s.studentType === "grupal" || s.studentType === "ambos");
 
-  async function teacherAddSignup() {
+  function toggleSelect(date) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(date) ? next.delete(date) : next.add(date);
+      return next;
+    });
+  }
+
+  function selectAll() { setSelected(new Set(SESSIONS)); }
+  function selectNone() { setSelected(new Set()); }
+
+  async function applyToSelected(open) {
+    if (selected.size === 0) return;
+    setBusy("bulk");
+    try {
+      await Promise.all(
+        [...selected].map((d) =>
+          Promise.all([
+            upsertOpenDate(d, open),
+            open ? upsertIndividualAvailability(d, Number(bulkStartHour), Number(bulkEndHour)) : Promise.resolve(),
+          ])
+        )
+      );
+    } catch (e) { console.error(e); }
+    await reload();
+    setBusy(false);
+  }
+
+  async function toggleOpen(date) {
+    setBusy(date);
+    try { await upsertOpenDate(date, !openDates[date]); } catch (e) { console.error(e); }
+    await reload();
+    setBusy(false);
+  }
+
+  async function teacherRemoveSignup(signupId) {
+    setBusy(signupId);
+    try { await deleteGroupSignup(signupId); } catch (e) { console.error(e); }
+    await reload();
+    setBusy(false);
+  }
+
+  async function teacherAddSignup(date) {
     if (!addStudentId) return;
-    const already = signupsForDate.some((g) => g.studentId === addStudentId);
-    if (already) return;
-    setBusy(true);
+    setBusy("add");
     try {
       await insertGroupSignup({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         studentId: addStudentId,
-        date: selectedDate,
+        date,
       });
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
     await reload();
     setAddStudentId("");
     setBusy(false);
   }
 
-  // Individual availability for this date
-  const avail = individualAvailability[selectedDate] || { startHour: 9, endHour: 13 };
-  const [startHour, setStartHour] = useState(avail.startHour);
-  const [endHour, setEndHour] = useState(avail.endHour);
-
-  useEffect(() => {
-    const a = individualAvailability[selectedDate] || { startHour: 9, endHour: 13 };
-    setStartHour(a.startHour);
-    setEndHour(a.endHour);
-  }, [selectedDate, individualAvailability]);
-
-  async function applyAvailability() {
-    setBusy(true);
-    try {
-      await upsertIndividualAvailability(selectedDate, Number(startHour), Number(endHour));
-    } catch (e) {
-      console.error(e);
-    }
-    await reload();
-    setBusy(false);
-  }
-
-  const bookingsForDate = individualBookings.filter((b) => b.date === selectedDate);
-  const pendingBookings = bookingsForDate.filter((b) => b.status === "pending");
-
   async function respondBooking(id, status) {
-    setBusy(true);
-    try {
-      await updateIndividualBooking(id, { status });
-    } catch (e) {
-      console.error(e);
-    }
+    setBusy(id);
+    try { await updateIndividualBooking(id, { status }); } catch (e) { console.error(e); }
     await reload();
     setBusy(false);
   }
+
+  // Agrupar sesiones por semana
+  const weeks = useMemo(() => {
+    const result = [];
+    let current = [];
+    SESSIONS.forEach((d, i) => {
+      current.push(d);
+      const next = SESSIONS[i + 1];
+      if (!next || new Date(next) - new Date(d) > 4 * 24 * 60 * 60 * 1000) {
+        result.push(current);
+        current = [];
+      }
+    });
+    if (current.length) result.push(current);
+    return result;
+  }, []);
+
+  const lbl = (ca, es) => lang === "ca" ? ca : es;
 
   return (
     <div>
-      <label style={styles.fieldLabel}>
-        {t.selectDate}
-        <select style={styles.input} value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)}>
-          {SESSIONS.map((d) => (
-            <option key={d} value={d}>
-              {formatDate(d, lang)}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <button
-        type="button"
-        style={{ ...styles.primaryBtnSmall, ...(isOpen ? styles.dangerBtnWide : {}) }}
-        onClick={toggleOpen}
-        disabled={busy}
-      >
-        {isOpen ? t.closeThisDate : t.openThisDate}
-      </button>
-
-      <h3 style={styles.subheading}>
-        <Users size={14} style={{ marginRight: 6, verticalAlign: "middle" }} />
-        {t.groupSignupsForDay} {formatDate(selectedDate, lang)}
-      </h3>
-      {signupsForDate.length === 0 ? (
-        <p style={styles.mutedText}>{t.noOneSignedUp}</p>
-      ) : (
-        <div style={styles.studentRows}>
-          {signupsForDate.map((g) => {
-            const s = studentById[g.studentId];
-            if (!s) return null;
-            return (
-              <div key={g.id} style={styles.studentListRow}>
-                <div style={{ flex: 1 }}>
-                  <div style={styles.attendanceName}>
-                    {s.name} {s.surname}
-                  </div>
-                  <div style={styles.attendanceMeta}>
-                    {s.groupNumber ? `${t.group} ${s.groupNumber}` : ""}
-                  </div>
-                </div>
-                <button style={styles.iconBtn} onClick={() => teacherRemoveSignup(g.id)} disabled={busy}>
-                  <Trash2 size={16} color="#cc3333" />
-                </button>
-              </div>
-            );
-          })}
+      {/* ── Panel de acción masiva ── */}
+      <div style={styles.bulkPanel}>
+        <div style={styles.bulkPanelHeader}>
+          <span style={styles.weekTitle}>{lbl("Acció ràpida", "Acción rápida")}</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button style={styles.weekActionBtn} onClick={selectAll} disabled={!!busy}>{lbl("Tots", "Todos")}</button>
+            <button style={{ ...styles.weekActionBtn, ...styles.weekActionBtnDanger }} onClick={selectNone} disabled={!!busy}>{lbl("Cap", "Ninguno")}</button>
+          </div>
         </div>
-      )}
 
-      <div style={styles.formCard}>
-        <label style={styles.fieldLabel}>
-          {t.addToDate}
-          <select style={styles.input} value={addStudentId} onChange={(e) => setAddStudentId(e.target.value)}>
-            <option value="">—</option>
-            {grupalStudents
-              .filter((s) => !signupsForDate.some((g) => g.studentId === s.id))
-              .map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} {s.surname}
-                </option>
-              ))}
-          </select>
-        </label>
-        <button type="button" style={styles.primaryBtnSmall} onClick={teacherAddSignup} disabled={busy || !addStudentId}>
-          <Plus size={16} style={{ marginRight: 6 }} />
-          {t.confirmSignup}
-        </button>
-      </div>
+        <p style={styles.mutedTextSmall}>
+          {selected.size === 0
+            ? lbl("Selecciona dies del calendari de sota", "Selecciona días del calendario de abajo")
+            : `${selected.size} ${lbl("dies seleccionats", "días seleccionados")}`}
+        </p>
 
-      <h3 style={styles.subheading}>
-        <Clock size={14} style={{ marginRight: 6, verticalAlign: "middle" }} />
-        {t.setAvailability}
-      </h3>
-      <div style={styles.formCard}>
-        <div style={{ display: "flex", gap: 10 }}>
+        {/* Horario individual a aplicar */}
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 10 }}>
           <label style={{ ...styles.fieldLabel, flex: 1 }}>
             {t.fromHour}
-            <select style={styles.input} value={startHour} onChange={(e) => setStartHour(e.target.value)}>
+            <select style={{ ...styles.input, fontSize: 12 }} value={bulkStartHour} onChange={(e) => setBulkStartHour(e.target.value)}>
               {Array.from({ length: 15 }, (_, i) => i + 6).map((h) => (
-                <option key={h} value={h}>
-                  {formatHour(h)}
-                </option>
+                <option key={h} value={h}>{formatHour(h)}</option>
               ))}
             </select>
           </label>
           <label style={{ ...styles.fieldLabel, flex: 1 }}>
             {t.toHour}
-            <select style={styles.input} value={endHour} onChange={(e) => setEndHour(e.target.value)}>
+            <select style={{ ...styles.input, fontSize: 12 }} value={bulkEndHour} onChange={(e) => setBulkEndHour(e.target.value)}>
               {Array.from({ length: 15 }, (_, i) => i + 6).map((h) => (
-                <option key={h} value={h}>
-                  {formatHour(h)}
-                </option>
+                <option key={h} value={h}>{formatHour(h)}</option>
               ))}
             </select>
           </label>
         </div>
-        <button type="button" style={styles.primaryBtnSmall} onClick={applyAvailability} disabled={busy}>
-          {t.applyAvailability}
-        </button>
+
+        {/* Botones de acción */}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            style={{ ...styles.primaryBtnSmall, flex: 1, marginBottom: 0 }}
+            onClick={() => applyToSelected(true)}
+            disabled={!!busy || selected.size === 0}
+          >
+            {lbl("Obrir seleccionats + horari", "Abrir seleccionados + horario")}
+          </button>
+          <button
+            style={{ ...styles.primaryBtnSmall, flex: 1, marginBottom: 0, background: "#cc3333" }}
+            onClick={() => applyToSelected(false)}
+            disabled={!!busy || selected.size === 0}
+          >
+            {lbl("Tancar seleccionats", "Cerrar seleccionados")}
+          </button>
+        </div>
       </div>
 
-      <h3 style={styles.subheading}>
-        <User size={14} style={{ marginRight: 6, verticalAlign: "middle" }} />
-        {t.individualRequests}
-      </h3>
-      {pendingBookings.length === 0 ? (
-        <p style={styles.mutedText}>{t.noRequests}</p>
-      ) : (
-        <div style={styles.studentRows}>
-          {pendingBookings.map((b) => {
-            const s = studentById[b.studentId];
-            if (!s) return null;
-            return (
-              <div key={b.id} style={styles.studentListRow}>
-                <div style={{ flex: 1 }}>
-                  <div style={styles.attendanceName}>
-                    {s.name} {s.surname}
-                  </div>
-                  <div style={styles.attendanceMeta}>{formatHour(b.hour)}</div>
-                </div>
-                <button style={styles.acceptBtn} onClick={() => respondBooking(b.id, "confirmed")} disabled={busy}>
-                  <Check size={14} />
-                </button>
-                <button style={styles.rejectBtn} onClick={() => respondBooking(b.id, "rejected")} disabled={busy}>
-                  <X size={14} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* ── Calendario ── */}
+      {weeks.map((weekDates, wi) => {
+        const month = new Date(weekDates[0] + "T12:00:00").toLocaleString(
+          lang === "ca" ? "ca-ES" : "es-ES", { month: "long", year: "numeric" }
+        );
+        return (
+          <div key={wi} style={{ marginBottom: 16 }}>
+            <div style={styles.weekHeader}>
+              <span style={styles.weekTitle}>{month.charAt(0).toUpperCase() + month.slice(1)}</span>
+            </div>
 
-      {bookingsForDate.filter((b) => b.status === "confirmed").length > 0 && (
-        <>
-          <h3 style={styles.subheading}>{t.bookingConfirmed}</h3>
-          <div style={styles.studentRows}>
-            {bookingsForDate
-              .filter((b) => b.status === "confirmed")
-              .map((b) => {
-                const s = studentById[b.studentId];
-                if (!s) return null;
+            <div style={styles.studentRows}>
+              {weekDates.map((date) => {
+                const isOpen = !!openDates[date];
+                const isSelected = selected.has(date);
+                const signups = groupSignups.filter((g) => g.date === date);
+                const pending = individualBookings.filter((b) => b.date === date && b.status === "pending");
+                const avail = individualAvailability[date];
+                const isExpanded = expandedDate === date;
+
                 return (
-                  <div key={b.id} style={styles.studentListRow}>
-                    <div style={{ flex: 1 }}>
-                      <div style={styles.attendanceName}>
-                        {s.name} {s.surname}
+                  <div key={date} style={{ ...styles.studentCard, ...(isSelected ? { borderColor: ORANGE } : {}) }}>
+                    <div style={styles.planningDayRow}>
+                      {/* Checkbox */}
+                      <button
+                        type="button"
+                        style={{ ...styles.checkboxCircle, marginRight: 8, flexShrink: 0 }}
+                        onClick={() => toggleSelect(date)}
+                      >
+                        {isSelected && <Check size={13} color="#0B0B0B" />}
+                      </button>
+
+                      {/* Info del día */}
+                      <div style={{ flex: 1, textAlign: "left" }} onClick={() => setExpandedDate(isExpanded ? null : date)}>
+                        <div style={styles.attendanceName}>{formatDate(date, lang)}</div>
+                        <div style={styles.attendanceMeta}>
+                          {isOpen
+                            ? `✅ ${lbl("Obert", "Abierto")} · ${signups.length} ${lbl("apuntats", "apuntados")}${avail ? ` · ${formatHour(avail.startHour)}-${formatHour(avail.endHour)}` : ""}`
+                            : `🔒 ${lbl("Tancat", "Cerrado")}`}
+                          {pending.length > 0 && ` · ${pending.length} ⏳`}
+                        </div>
                       </div>
-                      <div style={styles.attendanceMeta}>{formatHour(b.hour)}</div>
+
+                      {/* Toggle abrir/cerrar */}
+                      <button
+                        type="button"
+                        style={{
+                          ...styles.toggleBtnTiny,
+                          ...(isOpen ? { background: "#cc3333", color: "#fff", border: "none" } : styles.toggleBtnActive),
+                          flex: "none", width: 72, marginRight: 8,
+                        }}
+                        onClick={(e) => { e.stopPropagation(); toggleOpen(date); }}
+                        disabled={busy === date}
+                      >
+                        {isOpen ? lbl("Tancar", "Cerrar") : lbl("Obrir", "Abrir")}
+                      </button>
+
+                      <ChevronRight
+                        size={16} color="#888"
+                        style={{ transform: isExpanded ? "rotate(90deg)" : "none", cursor: "pointer" }}
+                        onClick={() => setExpandedDate(isExpanded ? null : date)}
+                      />
                     </div>
-                    <button style={styles.iconBtn} onClick={() => respondBooking(b.id, "rejected")} disabled={busy}>
-                      <Trash2 size={16} color="#cc3333" />
-                    </button>
+
+                    {/* Detalle expandido */}
+                    {isExpanded && (
+                      <div style={styles.editPanel}>
+                        <h4 style={styles.subheadingSmall}>
+                          <Users size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />
+                          {lbl("Apuntats", "Apuntados")} ({signups.length})
+                        </h4>
+                        {signups.length === 0 ? (
+                          <p style={styles.mutedText}>{t.noOneSignedUp}</p>
+                        ) : (
+                          <div style={styles.studentRows}>
+                            {signups.map((g) => {
+                              const s = studentById[g.studentId];
+                              if (!s) return null;
+                              return (
+                                <div key={g.id} style={{ ...styles.studentListRow, padding: "8px 10px" }}>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={styles.attendanceName}>{s.name} {s.surname}</div>
+                                  </div>
+                                  <button style={styles.iconBtn} onClick={() => teacherRemoveSignup(g.id)} disabled={!!busy}>
+                                    <Trash2 size={14} color="#cc3333" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Añadir alumno manualmente */}
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          <select
+                            style={{ ...styles.input, flex: 1, fontSize: 12, padding: "7px 10px" }}
+                            value={addStudentId}
+                            onChange={(e) => setAddStudentId(e.target.value)}
+                          >
+                            <option value="">— {t.addToDate} —</option>
+                            {grupalStudents
+                              .filter((s) => !signups.some((g) => g.studentId === s.id))
+                              .map((s) => (
+                                <option key={s.id} value={s.id}>{s.name} {s.surname}</option>
+                              ))}
+                          </select>
+                          <button
+                            type="button"
+                            style={{ ...styles.primaryBtnSmall, marginBottom: 0, padding: "7px 12px" }}
+                            onClick={() => teacherAddSignup(date)}
+                            disabled={busy === "add" || !addStudentId}
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+
+                        {/* Solicitudes individuales */}
+                        {individualBookings.filter((b) => b.date === date && b.status !== "rejected").length > 0 && (
+                          <>
+                            <h4 style={{ ...styles.subheadingSmall, marginTop: 12 }}>
+                              <User size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />
+                              {t.individualRequests}
+                            </h4>
+                            {individualBookings
+                              .filter((b) => b.date === date && b.status !== "rejected")
+                              .map((b) => {
+                                const s = studentById[b.studentId];
+                                if (!s) return null;
+                                return (
+                                  <div key={b.id} style={{ ...styles.studentListRow, padding: "8px 10px" }}>
+                                    <div style={{ flex: 1 }}>
+                                      <div style={styles.attendanceName}>{s.name} {s.surname}</div>
+                                      <div style={styles.attendanceMeta}>{formatHour(b.hour)} · {b.status === "pending" ? t.bookingPending : t.bookingConfirmed}</div>
+                                    </div>
+                                    {b.status === "pending" && (
+                                      <>
+                                        <button style={styles.acceptBtn} onClick={() => respondBooking(b.id, "confirmed")} disabled={!!busy}><Check size={13} /></button>
+                                        <button style={styles.rejectBtn} onClick={() => respondBooking(b.id, "rejected")} disabled={!!busy}><X size={13} /></button>
+                                      </>
+                                    )}
+                                    {b.status === "confirmed" && (
+                                      <button style={styles.iconBtn} onClick={() => respondBooking(b.id, "rejected")} disabled={!!busy}><Trash2 size={14} color="#cc3333" /></button>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
+            </div>
           </div>
-        </>
-      )}
+        );
+      })}
     </div>
   );
 }
@@ -2247,5 +2267,52 @@ const styles = {
     border: `1px solid ${BORDER}`,
     color: "#666",
     cursor: "not-allowed",
+  },
+  weekHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  weekTitle: { fontSize: 13, fontWeight: 800, color: ORANGE },
+  weekActionBtn: {
+    background: "transparent",
+    border: `1px solid ${ORANGE}`,
+    color: ORANGE,
+    borderRadius: 6,
+    padding: "4px 10px",
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  weekActionBtnDanger: {
+    border: "1px solid #cc3333",
+    color: "#ff8a8a",
+  },
+  planningDayRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "12px",
+    background: "transparent",
+    border: "none",
+    color: "#fff",
+    width: "100%",
+    cursor: "pointer",
+    textAlign: "left",
+  },
+  bulkPanel: {
+    background: CARD,
+    border: `1px solid ${ORANGE}`,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 20,
+  },
+  bulkPanelHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
   },
 };
