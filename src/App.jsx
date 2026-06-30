@@ -720,7 +720,8 @@ function StudentDetail({ t, lang, student, onBack, setView, openDates, groupSign
 }
 
 function GrupalSignupSection({ t, lang, student, left, openDates, groupSignups, reload }) {
-  const [busy, setBusy] = useState(null); // date being processed
+  const [pending, setPending] = useState(new Set()); // fechas seleccionadas pendientes de confirmar
+  const [busy, setBusy] = useState(false);
 
   const openDateList = SESSIONS.filter((d) => openDates[d]);
   const mySignups = groupSignups.filter((g) => g.studentId === student.id);
@@ -730,34 +731,52 @@ function GrupalSignupSection({ t, lang, student, left, openDates, groupSignups, 
     return <p style={styles.mutedText}>{t.noOpenDates}</p>;
   }
 
-  async function handleSignup(date) {
+  function togglePending(date) {
+    // Si ya está apuntado (confirmado), no hacer nada con pendiente
     if (mySignedDates.has(date)) return;
-    if (mySignups.length >= left) return;
-    setBusy(date);
-    try {
-      await insertGroupSignup({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        studentId: student.id,
-        date,
-      });
-    } catch (e) {
-      console.error(e);
-    }
-    await reload();
-    setBusy(null);
+    setPending((prev) => {
+      const next = new Set(prev);
+      if (next.has(date)) {
+        next.delete(date);
+      } else {
+        // No superar el límite de sesiones disponibles
+        if (next.size + mySignups.length >= left) return prev;
+        next.add(date);
+      }
+      return next;
+    });
   }
 
   async function handleCancel(date) {
     if (!isMoreThan24hAway(date)) return;
-    setBusy(date);
+    setBusy(true);
     try {
       await deleteGroupSignupsForStudentDate(student.id, date);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
     await reload();
-    setBusy(null);
+    setBusy(false);
   }
+
+  async function handleConfirm() {
+    if (pending.size === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        [...pending].map((date) =>
+          insertGroupSignup({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            studentId: student.id,
+            date,
+          })
+        )
+      );
+    } catch (e) { console.error(e); }
+    setPending(new Set());
+    await reload();
+    setBusy(false);
+  }
+
+  const totalSelected = mySignups.length + pending.size;
 
   return (
     <div>
@@ -767,64 +786,89 @@ function GrupalSignupSection({ t, lang, student, left, openDates, groupSignups, 
       <div style={styles.studentRows}>
         {openDateList.map((date) => {
           const signedUp = mySignedDates.has(date);
+          const isPending = pending.has(date);
           const canChange = isMoreThan24hAway(date);
-          const atLimit = !signedUp && mySignups.length >= left;
-          const disabled = busy === date || (signedUp ? !canChange : atLimit);
+          const atLimit = !signedUp && !isPending && totalSelected >= left;
+
           return (
-            <button
+            <div
               key={date}
-              type="button"
               style={{
                 ...styles.attendanceRow,
                 ...(signedUp ? styles.attendanceRowChecked : {}),
-                ...(disabled && !signedUp ? styles.attendanceRowDisabled : {}),
+                ...(isPending ? { borderColor: "#ffb066", background: "rgba(255,176,102,0.08)" } : {}),
+                ...(atLimit ? styles.attendanceRowDisabled : {}),
+                cursor: signedUp && !canChange ? "default" : "pointer",
               }}
-              onClick={() => (signedUp ? handleCancel(date) : handleSignup(date))}
-              disabled={disabled}
+              onClick={() => {
+                if (signedUp) { if (canChange) handleCancel(date); }
+                else if (!atLimit) togglePending(date);
+              }}
             >
-              <div style={styles.checkboxCircle}>{signedUp && <Check size={14} color="#0B0B0B" />}</div>
+              <div style={{
+                ...styles.checkboxCircle,
+                ...(isPending ? { borderColor: "#ffb066" } : {}),
+              }}>
+                {(signedUp || isPending) && <Check size={14} color={signedUp ? "#0B0B0B" : "#ffb066"} />}
+              </div>
               <div style={{ flex: 1, textAlign: "left" }}>
                 <div style={styles.attendanceName}>{formatDate(date, lang)}</div>
                 <div style={styles.attendanceMeta}>
                   {signedUp
-                    ? canChange
-                      ? t.cancelSignup
-                      : t.lockedSignup
+                    ? canChange ? t.cancelSignup : t.lockedSignup
+                    : isPending
+                    ? (lang === "ca" ? "Seleccionat (pendent confirmar)" : "Seleccionado (pendiente confirmar)")
                     : atLimit
                     ? t.fullDay
-                    : t.confirmSignup}
+                    : (lang === "ca" ? "Toca per seleccionar" : "Toca para seleccionar")}
                 </div>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
+
+      {pending.size > 0 && (
+        <button
+          type="button"
+          style={{ ...styles.primaryBtn, marginTop: 16 }}
+          onClick={handleConfirm}
+          disabled={busy}
+        >
+          <Check size={16} style={{ marginRight: 8 }} />
+          {lang === "ca"
+            ? `Confirmar ${pending.size} dia${pending.size > 1 ? "s" : ""}`
+            : `Confirmar ${pending.size} día${pending.size > 1 ? "s" : ""}`}
+        </button>
+      )}
     </div>
   );
 }
 
 function IndividualBookingSection({ t, lang, student, left, individualAvailability, individualBookings, reload }) {
-  const [busy, setBusy] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
+  const [selectedHour, setSelectedHour] = useState(null); // hora seleccionada pendiente de confirmar
+  const [busy, setBusy] = useState(false);
 
-  const myBookings = individualBookings.filter((b) => b.studentId === student.id);
+  const myBookings = individualBookings.filter((b) => b.studentId === student.id && b.status !== "rejected");
   const availableDates = SESSIONS.filter((d) => individualAvailability[d]);
 
-  async function handleBook(date, hour) {
-    setBusy(`${date}-${hour}`);
+  async function handleConfirmBooking() {
+    if (!selectedDate || selectedHour === null) return;
+    setBusy(true);
     try {
       await insertIndividualBooking({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         studentId: student.id,
-        date,
-        hour,
-        status: "pending",
+        date: selectedDate,
+        hour: selectedHour,
+        status: "confirmed", // reserva directa, sin paso de solicitud
       });
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
+    setSelectedDate(null);
+    setSelectedHour(null);
     await reload();
-    setBusy(null);
+    setBusy(false);
   }
 
   return (
@@ -835,8 +879,8 @@ function IndividualBookingSection({ t, lang, student, left, individualAvailabili
           <div style={styles.dateList}>
             {myBookings.map((b) => (
               <div key={b.id} style={styles.dateChip}>
-                {formatDate(b.date, lang)} · {formatHour(b.hour)} ·{" "}
-                {b.status === "pending" ? t.bookingPending : b.status === "confirmed" ? t.bookingConfirmed : t.bookingRejected}
+                <Check size={14} color="#FF6A00" style={{ marginRight: 6 }} />
+                {formatDate(b.date, lang)} · {formatHour(b.hour)}–{formatHour(b.hour + 1)} · {t.bookingConfirmed}
               </div>
             ))}
           </div>
@@ -851,39 +895,65 @@ function IndividualBookingSection({ t, lang, student, left, individualAvailabili
             const avail = individualAvailability[date];
             const hours = hourRange(avail.startHour, avail.endHour);
             const isExpanded = selectedDate === date;
+
             return (
               <div key={date} style={styles.individualDateCard}>
                 <button
                   type="button"
                   style={styles.attendanceRow}
-                  onClick={() => setSelectedDate(isExpanded ? null : date)}
+                  onClick={() => {
+                    setSelectedDate(isExpanded ? null : date);
+                    setSelectedHour(null);
+                  }}
                 >
                   <div style={{ flex: 1, textAlign: "left" }}>
                     <div style={styles.attendanceName}>{formatDate(date, lang)}</div>
+                    <div style={styles.attendanceMeta}>
+                      {avail ? `${formatHour(avail.startHour)}–${formatHour(avail.endHour)}` : ""}
+                    </div>
                   </div>
-                  <ChevronRight size={16} color="#888" />
+                  <ChevronRight size={16} color="#888" style={{ transform: isExpanded ? "rotate(90deg)" : "none" }} />
                 </button>
+
                 {isExpanded && (
-                  <div style={styles.hourGrid}>
-                    {hours.map((h) => {
-                      const taken = individualBookings.some(
-                        (b) => b.date === date && b.hour === h && b.status !== "rejected"
-                      );
-                      return (
-                        <button
-                          key={h}
-                          type="button"
-                          style={{
-                            ...styles.hourBtn,
-                            ...(taken ? styles.hourBtnTaken : {}),
-                          }}
-                          disabled={taken || busy === `${date}-${h}`}
-                          onClick={() => handleBook(date, h)}
-                        >
-                          {formatHour(h)}
-                        </button>
-                      );
-                    })}
+                  <div style={{ padding: "0 12px 12px" }}>
+                    <div style={styles.hourGrid}>
+                      {hours.map((h) => {
+                        const taken = individualBookings.some(
+                          (b) => b.date === date && b.hour === h && b.status !== "rejected"
+                        );
+                        const isChosen = selectedHour === h;
+                        return (
+                          <button
+                            key={h}
+                            type="button"
+                            style={{
+                              ...styles.hourBtn,
+                              ...(taken ? styles.hourBtnTaken : {}),
+                              ...(isChosen ? { background: ORANGE, color: "#0B0B0B", border: "none" } : {}),
+                            }}
+                            disabled={taken}
+                            onClick={() => setSelectedHour(isChosen ? null : h)}
+                          >
+                            {`${formatHour(h)}–${formatHour(h + 1)}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {selectedHour !== null && (
+                      <button
+                        type="button"
+                        style={{ ...styles.primaryBtn, marginTop: 12 }}
+                        onClick={handleConfirmBooking}
+                        disabled={busy}
+                      >
+                        <Check size={16} style={{ marginRight: 8 }} />
+                        {lang === "ca"
+                          ? `Confirmar ${formatHour(selectedHour)}–${formatHour(selectedHour + 1)}`
+                          : `Confirmar ${formatHour(selectedHour)}–${formatHour(selectedHour + 1)}`}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
