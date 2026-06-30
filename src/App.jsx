@@ -627,8 +627,9 @@ function StudentDetail({ t, lang, student, onBack, setView, openDates, groupSign
   const used = student.attendance.length;
   const left = Math.max(total - used, 0);
 
-  const canGrupal = student.studentType === "grupal" || student.studentType === "ambos";
-  const canIndividual = student.studentType === "individual" || student.studentType === "ambos";
+  const effectiveType = student.studentType || "grupal";
+  const canGrupal = effectiveType === "grupal" || effectiveType === "ambos";
+  const canIndividual = effectiveType === "individual" || effectiveType === "ambos";
 
   const [signupMode, setSignupMode] = useState(
     canGrupal && canIndividual ? null : canGrupal ? "grupal" : "individual"
